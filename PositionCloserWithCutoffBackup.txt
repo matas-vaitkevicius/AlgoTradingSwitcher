@@ -1,0 +1,298 @@
+#include <Trade/Trade.mqh>  
+ 
+#define MT_WMCMD_EXPERTS   32851
+#define WM_COMMAND 0x0111
+#define GA_ROOT    2
+#include <WinAPI\winapi.mqh>
+
+input int Year = 2023;
+input int Month = 1;
+input int Day = 27;
+input int Hour = 22;
+input int Minute = 45;
+input int VolumeToShutDown = 210;
+input int VolumeToSwitchBackOn = 100;
+input int MinutesOverVolumeToShutDown = 3;
+input int MinutesUnderVolumeToTurnBackOn = 10;
+input bool SwitchOffOnFriday = true;
+
+input string MultiDateArray = "2023,01,27,14,30,00;2023,01,27,16,00,00;2023,01,31,08,45,00;2023,01,31,09,55,00;2023,01,31,10,00,00;2023,01,31,11,00,00;2023,01,31,14,00,00;2023,01,31,16,00,00;2023,02,01,11,00,00;2023,02,01,16,00,00;2023,02,01,20,00,00";
+input int DurationOfMinutesForMultiDateIntervalShutDown = 30;
+input int MinutesToShutDownBeforeMultiDateIntervalStart = 10;
+
+ulong VolumePerMinuteArray[60];
+ulong VolumeMultiplier = 10000000;
+bool IsCutOff = false;
+string DateTimesToShutDownAsString[];
+
+int OnInit()
+   {
+     Print(__FUNCTION__, " Position Closer ",Symbol()," ",MarketBookAdd(NULL));
+     if (MultiDateArray != "")
+     {
+        StringSplit(MultiDateArray,';',DateTimesToShutDownAsString);
+     } 
+     return(INIT_SUCCEEDED);
+   }
+
+datetime ParseDate(string dateAsString, int MinutesToShutDownBeforeMultiDateIntervalStart)
+   {
+     string dateTimeArrayForParsing[];
+     StringSplit(dateAsString,',',dateTimeArrayForParsing);
+     
+     //Print(__FUNCTION__, " dateAsString ",dateAsString);
+     //Print(__FUNCTION__, " ",dateTimeArrayForParsing[0]);
+     //Print(__FUNCTION__, " ",dateTimeArrayForParsing[1]);
+     //Print(__FUNCTION__, " ",dateTimeArrayForParsing[2]);
+     //Print(__FUNCTION__, " ",dateTimeArrayForParsing[3]);
+     //Print(__FUNCTION__, " ",dateTimeArrayForParsing[4]);
+     //Print(__FUNCTION__, " ",dateTimeArrayForParsing[5]);
+     
+     MqlDateTime mdt;
+     mdt.year = dateTimeArrayForParsing[0];
+     mdt.mon = dateTimeArrayForParsing[1];
+     mdt.day = dateTimeArrayForParsing[2];
+     mdt.hour = dateTimeArrayForParsing[3];
+     mdt.min = (StringToInteger(dateTimeArrayForParsing[4]) - MinutesToShutDownBeforeMultiDateIntervalStart);
+     mdt.sec = dateTimeArrayForParsing[5];
+     return StructToTime(mdt);
+   }
+
+void SetAlgoTradingStatus(bool Enable)
+   {
+     bool Status = (bool) TerminalInfoInteger(TERMINAL_TRADE_ALLOWED);
+
+     if(Enable != Status)
+     {
+        HANDLE hChart = (HANDLE) ChartGetInteger(ChartID(), CHART_WINDOW_HANDLE);
+        PostMessageW(GetAncestor(hChart, GA_ROOT), WM_COMMAND, MT_WMCMD_EXPERTS, 0);
+     }
+  } 
+
+int GetIndexWithinHour(int currentMinute, int i)
+   {
+    int index = currentMinute - i;
+         
+    if (index < 0)
+       index = index+60;
+       
+    return index;
+   }
+
+void GetTrailingMinuteArray(int& MinuteArrayElements[], int TrailingArraySize, int currentMinute)
+   {
+      ArrayResize(MinuteArrayElements, TrailingArraySize);
+            
+      for(int ii = 0; ii<MinuteArrayElements.Size(); ii++)
+      {
+         int index = GetIndexWithinHour(currentMinute, ii);
+            //Print(__FUNCTION__, " index ", index, " MinuteArrayElementsToSumForGoingOverVolume[ii] ", MinuteArrayElementsToSumForGoingOverVolume[ii]);   
+         MinuteArrayElements[ii] = index;
+      }
+   }
+
+ulong GetVolumeForDuration(int duration, int minutes)
+   {
+      ulong VolumeInDuration = 0;
+      int MinuteArrayElementsToSum[]; 
+      
+      GetTrailingMinuteArray(MinuteArrayElementsToSum, duration, minutes);
+      
+      for(int ii = 0; ii<MinuteArrayElementsToSum.Size(); ii++)
+      {
+         //Print(__FUNCTION__, " VolumeInDuration: ", VolumeInDuration, " ii ", ii, " MinuteArrayElementsToSum[ii]  ", MinuteArrayElementsToSum[ii], " VolumePerMinuteArray[MinuteArrayElementsToSum[ii]] ", VolumePerMinuteArray[MinuteArrayElementsToSum[ii]]);
+         VolumeInDuration +=VolumePerMinuteArray[MinuteArrayElementsToSum[ii]];
+      }
+   
+   //Print(__FUNCTION__, "duration ",duration," minutes ",minutes," VolumeInDuration: ", VolumeInDuration);
+   return VolumeInDuration;
+   }
+
+bool IsWithinShutDownTimeInterval(datetime Time)
+   {
+      datetime TimeSpanStart = (TimeCurrent() - DurationOfMinutesForMultiDateIntervalShutDown*60);
+    
+      return (TimeSpanStart <= Time && Time <= TimeCurrent());
+   }
+
+void CommentLab(string LabelName, string CommentText, int Percent)  
+   {
+      string CommentLabel;
+      int CommentIndex = 0;
+     
+      if (CommentText == "")
+      {
+         //  delete all Comment texts
+         while(ObjectFind(0,LabelName) >= 0)
+         {
+            ObjectDelete(0,LabelName);
+            CommentIndex++;
+         }
+      }
+      
+      long textColor = clrWhite;
+      
+      if (Percent >= 90)
+         textColor = clrCrimson;
+      else if (Percent >= 75)
+         textColor = clrGoldenrod;
+
+      
+         ObjectCreate(0,LabelName,OBJ_LABEL,0,0,0);           
+         ObjectSetInteger(0,LabelName, OBJPROP_CORNER, 0);
+         //--- set X coordinate
+         ObjectSetInteger(0,LabelName,OBJPROP_XDISTANCE,20);
+         //--- set Y coordinate
+         ObjectSetInteger(0,LabelName,OBJPROP_YDISTANCE,50);
+         //--- define text color
+         ObjectSetInteger(0,LabelName,OBJPROP_COLOR,textColor);
+         //--- define text for object Label
+         ObjectSetString(0,LabelName,OBJPROP_TEXT,CommentText);
+         //--- define font
+         ObjectSetString(0,LabelName,OBJPROP_FONT,"Arial");
+         //--- define font size
+         ObjectSetInteger(0,LabelName,OBJPROP_FONTSIZE,18);
+         //--- 45 degrees rotation clockwise
+   //    ObjectSetDouble(0,label_name,OBJPROP_ANGLE,-45);
+         //--- disable for mouse selecting
+         ObjectSetInteger(0,LabelName,OBJPROP_SELECTABLE,true);
+         //--- draw it on the chart
+         ChartRedraw(0);                                     
+   }
+
+void OnDeinit(const int reason)
+  {
+
+  }
+
+void OnTick()
+  {
+      MqlDateTime currentTime;
+      TimeCurrent(currentTime);
+
+      if (currentTime.min == 59)
+         VolumePerMinuteArray[0] = 0;
+      else
+         VolumePerMinuteArray[currentTime.min+1] = 0;
+      
+      ulong Volumes[];
+      
+      CopyTickVolume(NULL,PERIOD_CURRENT,0,1,Volumes);
+         //Print(__FUNCTION__, " Volumes[0] ", Volumes[0]," Volumes.Size ", Volumes.Size()," PERIOD_CURRENT ",PERIOD_CURRENT);
+      VolumePerMinuteArray[currentTime.min]=Volumes[0];
+      
+      ulong VolumeForShutdown = GetVolumeForDuration(MinutesOverVolumeToShutDown, currentTime.min);
+      ulong VolumeToSwitchOn = GetVolumeForDuration(MinutesUnderVolumeToTurnBackOn, currentTime.min);
+         //Print(__FUNCTION__, " VolumeToSwitchOn ",VolumeToSwitchOn);
+         
+      bool isUnderThreshold = VolumeToSwitchOn < (VolumeToSwitchBackOn*MinutesUnderVolumeToTurnBackOn);
+      bool isOverThreshold = VolumeForShutdown > (VolumeToShutDown*MinutesOverVolumeToShutDown);
+      
+      double VolumeToSwitchOnPercent = NormalizeDouble(((double)(VolumeToSwitchBackOn*MinutesUnderVolumeToTurnBackOn)/(double)(VolumeToSwitchOn)*100),2); 
+      double VolumeToShutDownPercent = NormalizeDouble((VolumeForShutdown/((double)VolumeToShutDown*MinutesOverVolumeToShutDown)*100),2);
+      
+      if (isOverThreshold == false)
+         CommentLab("label1","Volume For Shutdown: "+ VolumeToShutDownPercent + "%", VolumeToShutDownPercent); 
+
+      if ((bool) TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) == false)
+         CommentLab("label1","Volume For Switch On: "+VolumeToSwitchOn+", "+VolumeToSwitchOnPercent+ "%", VolumeToSwitchOnPercent);
+                     
+      MqlDateTime dateTimeMapping;
+      dateTimeMapping.year = Year;
+      dateTimeMapping.mon = Month;
+      dateTimeMapping.day = Day;
+      dateTimeMapping.hour = Hour;
+      dateTimeMapping.min = Minute;
+      dateTimeMapping.sec = 0;
+            
+      datetime dateTimeToCloseAllTrades = StructToTime(dateTimeMapping);
+      bool isOverGeneralTime = dateTimeToCloseAllTrades < TimeCurrent();
+      
+      if (SwitchOffOnFriday == true && isOverGeneralTime == false)
+      {
+         datetime from,fridaySessionClosingTime;
+         uint session=0;
+         
+         SymbolInfoSessionQuote(NULL,FRIDAY,session,from,fridaySessionClosingTime);
+         
+         MqlDateTime nowForFridaySessionTimeCalculation;
+         MqlDateTime nowForFridaySessionTimeModification;
+         
+         TimeCurrent(nowForFridaySessionTimeCalculation);
+         TimeToStruct(fridaySessionClosingTime,nowForFridaySessionTimeModification);
+         
+         nowForFridaySessionTimeModification.year = nowForFridaySessionTimeCalculation.year;
+         nowForFridaySessionTimeModification.mon = nowForFridaySessionTimeCalculation.mon;
+         nowForFridaySessionTimeModification.day = nowForFridaySessionTimeCalculation.day+(5-nowForFridaySessionTimeCalculation.day_of_week);
+         
+         datetime fridaySessionClosingTimeWithDate = StructToTime(nowForFridaySessionTimeModification);
+         datetime thirtyMinutesBeforeExchangeClosingTime = fridaySessionClosingTimeWithDate-(30*60);
+         
+         //Print(__FUNCTION__, " fridaySessionClosingTimeWithDate ",fridaySessionClosingTimeWithDate, " thirtyMinutesBeforeExchangeClosingTime ",thirtyMinutesBeforeExchangeClosingTime);
+         isOverGeneralTime = thirtyMinutesBeforeExchangeClosingTime < TimeCurrent();
+      }
+      
+      bool isWithinShutDownTimeInterval = false;
+      datetime activeShutDownTimeInterval;      
+      //Print(__FUNCTION__, "DateTimesToShutDownAsString.Size() ",DateTimesToShutDownAsString.Size());
+
+      for(int i=0; i<DateTimesToShutDownAsString.Size(); i++)
+      {
+         //Print(__FUNCTION__, " i ", i, "DateTimesToShutDownAsString[i] ",DateTimesToShutDownAsString[i], " IsWithinTimeSpanForShutdownDuration ",  IsWithinShutDownTimeInterval(ParseDate(DateTimesToShutDownAsString[i])));
+         if (DateTimesToShutDownAsString[i] != "")
+         {
+         activeShutDownTimeInterval = ParseDate(DateTimesToShutDownAsString[i], MinutesToShutDownBeforeMultiDateIntervalStart);
+         isWithinShutDownTimeInterval = IsWithinShutDownTimeInterval(activeShutDownTimeInterval);
+            
+         if (isWithinShutDownTimeInterval == true)
+            break; 
+         }
+      }
+      
+      if (isOverGeneralTime || isOverThreshold || isWithinShutDownTimeInterval)
+      {
+         ulong totalpos=PositionsTotal();
+         ulong ticket;
+         CTrade trade;
+        
+         for (ulong i=0; i<totalpos; i++)
+         {
+            if((ticket=PositionGetTicket(i))>0)
+            {             
+               trade.PositionClose(ticket);
+               Print(__FUNCTION__, " Closed trade ",ticket);
+            }
+         }
+         
+         if (IsCutOff == false)
+         {
+            if(isOverGeneralTime)
+               Print(__FUNCTION__, " Timer expired ", dateTimeToCloseAllTrades);
+            else if (isOverThreshold)
+               Print(__FUNCTION__, " Went over Volume ", VolumeToShutDown);
+            else
+               Print(__FUNCTION__, " Is Within ShutDown Time Interval ", activeShutDownTimeInterval, " - ", activeShutDownTimeInterval+(DurationOfMinutesForMultiDateIntervalShutDown*60));
+          }  
+         if(PositionsTotal() == 0)
+         {
+            SetAlgoTradingStatus(false);
+            IsCutOff = true;
+            
+            if (isOverGeneralTime)
+               ExpertRemove();
+         }
+      }
+      
+      int arrayIndexToCheckIfBotWasRunningLongEnoughForSwitchOn = GetIndexWithinHour(currentTime.min, MinutesUnderVolumeToTurnBackOn);
+      //Print(__FUNCTION__, " arrayIndexToCheckIfBotWasRunningLongEnoughForSwitchOn ", arrayIndexToCheckIfBotWasRunningLongEnoughForSwitchOn);
+         
+      if (IsCutOff == true && VolumePerMinuteArray[arrayIndexToCheckIfBotWasRunningLongEnoughForSwitchOn] != 0) 
+      {
+         if (isUnderThreshold == true && isWithinShutDownTimeInterval == false)
+         {
+            Print(__FUNCTION__, " isUnderThreshold ",isUnderThreshold);
+            SetAlgoTradingStatus(true);
+            IsCutOff = false;
+         }
+      }
+   }

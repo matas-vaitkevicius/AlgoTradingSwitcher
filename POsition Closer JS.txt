@@ -1,0 +1,12 @@
+st = '';
+[].forEach.call(document.getElementsByClassName("dfx-economicCalendarRow__time"),
+                x => {
+    st+=x.getAttribute('data-time')+';';
+      st =  st.replaceAll("-", ",").replaceAll(":", ",").replaceAll("+", ",").replaceAll("T", ",").replaceAll(".", ",").replaceAll(",000,01,00", "");
+                 
+               }  
+             
+               ) 
+   st = st.substring(0, st.length - 2);
+
+console.log(st);
